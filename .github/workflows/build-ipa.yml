@@ -1,0 +1,55 @@
+# Builds an unsigned Velaryn.ipa on a GitHub-hosted Mac.
+# Sideloadly signs it with your own Apple ID when you install it.
+# Run it from the repo's Actions tab -> "Build IPA" -> "Run workflow", then download the artifact.
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --clean
+        env:
+          CI: 1
+
+      - name: Build (Release, unsigned)
+        run: |
+          WORKSPACE=$(ls -d ios/*.xcworkspace | head -n1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -n 40
+
+      - name: Package .ipa
+        run: |
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -n1)
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry Velaryn.ipa Payload
+          ls -lh Velaryn.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Velaryn-ipa
+          path: Velaryn.ipa
