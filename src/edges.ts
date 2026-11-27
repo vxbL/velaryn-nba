@@ -13,6 +13,7 @@ const TOTAL_SD = 17;
 
 export interface Leg {
   id: string;
+  ticker: string; // Kalshi market ticker
   gameId: string;
   game: string; // "MIA @ NYK"
   kind: 'Winner' | 'Total' | 'Spread' | 'Prop';
@@ -52,7 +53,7 @@ export function gameLegs(game: Game, pred: Prediction, kg: KalshiGame | undefine
     if (!m || m.yesAsk === null) continue;
     const prob = side === game.home ? pred.homeWinProb : 1 - pred.homeWinProb;
     legs.push(
-      makeLeg({ id: m.ticker, gameId: game.id, game: name, kind: 'Winner', label: `${side.team.short} to win`, side: 'YES', price: m.yesAsk, prob, url: kalshiUrl(m.eventTicker) }),
+      makeLeg({ id: m.ticker, ticker: m.ticker, gameId: game.id, game: name, kind: 'Winner', label: `${side.team.short} to win`, side: 'YES', price: m.yesAsk, prob, url: kalshiUrl(m.eventTicker) }),
     );
   }
 
@@ -61,9 +62,9 @@ export function gameLegs(game: Game, pred: Prediction, kg: KalshiGame | undefine
       if (m.strike === null) continue;
       const over = 1 - normCdf((m.strike - pred.projectedTotal) / TOTAL_SD);
       if (m.yesAsk !== null)
-        legs.push(makeLeg({ id: `${m.ticker}-Y`, gameId: game.id, game: name, kind: 'Total', label: `Over ${m.strike} pts`, side: 'YES', price: m.yesAsk, prob: blendWithMarket(over, m, 'YES'), url: kalshiUrl(m.eventTicker) }));
+        legs.push(makeLeg({ id: `${m.ticker}-Y`, ticker: m.ticker, gameId: game.id, game: name, kind: 'Total', label: `Over ${m.strike} pts`, side: 'YES', price: m.yesAsk, prob: blendWithMarket(over, m, 'YES'), url: kalshiUrl(m.eventTicker) }));
       if (m.noAsk !== null)
-        legs.push(makeLeg({ id: `${m.ticker}-N`, gameId: game.id, game: name, kind: 'Total', label: `Under ${m.strike} pts`, side: 'NO', price: m.noAsk, prob: blendWithMarket(1 - over, m, 'NO'), url: kalshiUrl(m.eventTicker) }));
+        legs.push(makeLeg({ id: `${m.ticker}-N`, ticker: m.ticker, gameId: game.id, game: name, kind: 'Total', label: `Under ${m.strike} pts`, side: 'NO', price: m.noAsk, prob: blendWithMarket(1 - over, m, 'NO'), url: kalshiUrl(m.eventTicker) }));
     }
   }
 
@@ -76,7 +77,7 @@ export function gameLegs(game: Game, pred: Prediction, kg: KalshiGame | undefine
       const teamMargin = isHome ? pred.projectedMargin : -pred.projectedMargin;
       const cover = 1 - normCdf((m.strike - teamMargin) / MARGIN_SD);
       if (m.yesAsk !== null)
-        legs.push(makeLeg({ id: `${m.ticker}-Y`, gameId: game.id, game: name, kind: 'Spread', label: m.title, side: 'YES', price: m.yesAsk, prob: blendWithMarket(cover, m, 'YES'), url: kalshiUrl(m.eventTicker) }));
+        legs.push(makeLeg({ id: `${m.ticker}-Y`, ticker: m.ticker, gameId: game.id, game: name, kind: 'Spread', label: m.title, side: 'YES', price: m.yesAsk, prob: blendWithMarket(cover, m, 'YES'), url: kalshiUrl(m.eventTicker) }));
     }
   }
   return legs.filter((l): l is Leg => l !== null);
@@ -111,6 +112,7 @@ export function propLegs(game: Game, props: KalshiProp[], players: Record<string
     const model = 1 - normCdf((m.threshold - 0.5 - mu) / PROP_SD[m.stat](mu));
     const leg = makeLeg({
       id: m.ticker,
+      ticker: m.ticker,
       gameId: game.id,
       game: name,
       kind: 'Prop',
@@ -135,8 +137,8 @@ export interface Combo {
 }
 
 // Value legs only: positive expected value and more likely than not to hit.
-export const valueLegs = (legs: Leg[], minProb = 0.55) =>
-  legs.filter((l) => l.ev > 0.02 && l.prob >= minProb).sort((a, b) => b.ev - a.ev);
+export const valueLegs = (legs: Leg[], minProb = 0.55, minEv = 0.02) =>
+  legs.filter((l) => l.ev > minEv && l.prob >= minProb).sort((a, b) => b.ev - a.ev);
 
 export function kellyPct(prob: number, multiplier: number) {
   const b = multiplier - 1;
@@ -145,12 +147,24 @@ export function kellyPct(prob: number, multiplier: number) {
   return Math.max(0, Math.min(5, f * 25)); // quarter Kelly, max 5% of bankroll
 }
 
-export function buildCombos(legs: Leg[], max = 8): Combo[] {
-  // Best value leg per game, so combo legs don't depend on each other
+export type ComboMode = 'safest' | 'value' | 'payout';
+
+// Favorites are usually priced close to fair, so 'safest' accepts any positive edge.
+const MODES: Record<ComboMode, { minLegProb: number; minEv: number; maxLegs: number; minComboProb: number }> = {
+  safest: { minLegProb: 0.65, minEv: 0, maxLegs: 3, minComboProb: 0.45 }, // highest chance to hit, smaller payout
+  value: { minLegProb: 0.6, minEv: 0.02, maxLegs: 3, minComboProb: 0.3 }, // best payout-to-risk (expected value)
+  payout: { minLegProb: 0.55, minEv: 0.02, maxLegs: 4, minComboProb: 0.15 }, // bigger multiplier, hits less often
+};
+
+export function buildCombos(legs: Leg[], mode: ComboMode = 'safest', max = 8): Combo[] {
+  const cfg = MODES[mode];
+  // One leg per game so legs don't depend on each other. In 'safest' mode keep the most likely
+  // value leg of each game, otherwise the one with the best expected value.
   const perGame = new Map<string, Leg>();
-  for (const l of valueLegs(legs, 0.6)) {
+  for (const l of valueLegs(legs, cfg.minLegProb, cfg.minEv)) {
     const cur = perGame.get(l.gameId);
-    if (!cur || l.prob * (1 + l.ev) > cur.prob * (1 + cur.ev)) perGame.set(l.gameId, l);
+    const better = mode === 'safest' ? !cur || l.prob > cur.prob : !cur || l.ev > cur.ev;
+    if (better) perGame.set(l.gameId, l);
   }
   const pool = [...perGame.values()].sort((a, b) => b.prob - a.prob).slice(0, 10);
   const combos: Combo[] = [];
@@ -158,14 +172,26 @@ export function buildCombos(legs: Leg[], max = 8): Combo[] {
     const prob = ls.reduce((s, l) => s * l.prob, 1);
     const multiplier = ls.reduce((s, l) => s * l.multiplier, 1);
     const ev = prob * multiplier - 1;
-    if (ev > 0) combos.push({ legs: ls, prob, multiplier, ev, stakePct: kellyPct(prob, multiplier) });
+    if (ev > 0 && prob >= cfg.minComboProb) combos.push({ legs: ls, prob, multiplier, ev, stakePct: kellyPct(prob, multiplier) });
   };
-  for (let i = 0; i < pool.length; i++)
-    for (let j = i + 1; j < pool.length; j++) {
-      add([pool[i], pool[j]]);
-      for (let k = j + 1; k < pool.length; k++) add([pool[i], pool[j], pool[k]]);
-    }
-  return combos.sort((a, b) => b.prob - a.prob || b.ev - a.ev).slice(0, max);
+  const pick = (start: number, chosen: Leg[]) => {
+    if (chosen.length >= 2) add(chosen);
+    if (chosen.length === cfg.maxLegs) return;
+    for (let i = start; i < pool.length; i++) pick(i + 1, [...chosen, pool[i]]);
+  };
+  pick(0, []);
+  const sorters: Record<ComboMode, (a: Combo, b: Combo) => number> = {
+    safest: (a, b) => b.prob - a.prob || b.ev - a.ev,
+    value: (a, b) => b.ev - a.ev,
+    payout: (a, b) => b.multiplier - a.multiplier,
+  };
+  return combos.sort(sorters[mode]).slice(0, max);
 }
+
+export const comboStats = (legs: Leg[]) => {
+  const prob = legs.reduce((s, l) => s * l.prob, 1);
+  const multiplier = legs.reduce((s, l) => s * l.multiplier, 1);
+  return { prob, multiplier, ev: prob * multiplier - 1 };
+};
 
 export const americanToMultiplier = (ml: number | null) => (ml === null ? null : ml > 0 ? 1 + ml / 100 : 1 + 100 / -ml);

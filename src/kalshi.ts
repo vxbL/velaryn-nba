@@ -20,9 +20,11 @@ export interface KalshiMarket {
   yesAsk: number | null; // dollars, 0-1
   yesBid: number | null;
   noAsk: number | null;
+  noBid: number | null;
   strike: number | null;
   volume: number;
   status: string;
+  result: '' | 'yes' | 'no'; // set once the market settles
 }
 
 export interface KalshiGame {
@@ -46,10 +48,29 @@ function parseMarket(m: any): KalshiMarket {
     yesAsk: cents(m.yes_ask_dollars, m.yes_ask),
     yesBid: cents(m.yes_bid_dollars, m.yes_bid),
     noAsk: cents(m.no_ask_dollars, m.no_ask),
+    noBid: cents(m.no_bid_dollars, m.no_bid),
     strike: num(m.floor_strike),
     volume: num(m.volume) ?? 0,
     status: m.status,
+    result: m.result === 'yes' || m.result === 'no' ? m.result : '',
   };
+}
+
+// Kalshi crowd probability for YES: mid of bid/ask, else last available side
+export const kalshiYesProb = (m: KalshiMarket) =>
+  m.yesBid !== null && m.yesAsk !== null && m.yesBid > 0 ? (m.yesBid + m.yesAsk) / 2 : m.yesAsk ?? m.yesBid;
+
+export async function fetchMarkets(tickers: string[]): Promise<Record<string, KalshiMarket>> {
+  const unique = [...new Set(tickers)];
+  const pairs = await Promise.all(
+    unique.map(async (t) => {
+      const res = await fetch(`${KALSHI}/markets/${t}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return [t, parseMarket(data.market)] as const;
+    }),
+  );
+  return Object.fromEntries(pairs.filter((p): p is readonly [string, KalshiMarket] => p !== null));
 }
 
 async function getAll(query: string): Promise<KalshiMarket[]> {

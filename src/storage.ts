@@ -13,6 +13,41 @@ export interface LoggedPick {
   result?: 'W' | 'L';
 }
 
+const BETS = 'velaryn.lockedBets';
+
+export interface LockedLeg {
+  ticker: string;
+  side: 'YES' | 'NO';
+  label: string;
+  game: string;
+  kind: string;
+  entryPrice: number; // dollars per contract when locked
+  prob: number; // Velaryn probability when locked
+  url: string;
+}
+
+export interface LockedBet {
+  id: string;
+  createdAt: string;
+  stake: number;
+  payout: number; // what it pays if every leg hits (editable to match Kalshi's quote)
+  legs: LockedLeg[];
+}
+
+export async function getBets(): Promise<LockedBet[]> {
+  try {
+    return JSON.parse((await AsyncStorage.getItem(BETS)) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
+export async function saveBets(bets: LockedBet[]) {
+  try {
+    await AsyncStorage.setItem(BETS, JSON.stringify(bets));
+  } catch {}
+}
+
 export async function getFavorite(): Promise<string | null> {
   try {
     return await AsyncStorage.getItem(FAV);

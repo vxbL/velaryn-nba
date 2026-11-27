@@ -28,6 +28,7 @@ export interface LeagueData {
 }
 
 const LIVE_REFRESH_MS = 30_000;
+export const KALSHI_REFRESH_MS = 15_000;
 
 export function useLeague() {
   const [league, setLeague] = useState<LeagueData | null>(null);
@@ -93,6 +94,22 @@ export function useDay(date: Date, league: LeagueData | null) {
       if (timer.current) clearInterval(timer.current);
     };
   }, [anyLive, load]);
+
+  // Kalshi prices move constantly: refresh them on their own, faster than the full reload
+  const gamesRef = useRef<Game[]>([]);
+  gamesRef.current = data?.games ?? [];
+  const gameIds = gamesRef.current.map((g) => g.id).join();
+  useEffect(() => {
+    if (!gameIds) return;
+    const id = setInterval(() => {
+      const games = gamesRef.current;
+      fetchKalshiGames(games)
+        .then((kalshi) => setData((d) => (d && d.games === games ? { ...d, kalshi } : d)))
+        .catch(() => {});
+    }, KALSHI_REFRESH_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameIds]);
 
   return { data, loading, error, reload: load };
 }

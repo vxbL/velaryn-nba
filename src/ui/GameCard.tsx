@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Game, GameSide, GameSummary } from '../api';
 import { americanToMultiplier } from '../edges';
-import { kalshiMultiplier, type KalshiGame } from '../kalshi';
+import { kalshiMultiplier, kalshiYesProb, type KalshiGame } from '../kalshi';
 import type { Prediction } from '../model';
 import { C, pctText, xText } from '../theme';
 import { Logo, Pill, ProbBar } from './common';
@@ -37,7 +37,10 @@ export function GameCard({ game, pred, summary, kalshi, favoriteId, onPress }: P
         </View>
         <View style={st.cols}>
           <Text style={[st.prob, prob >= 0.5 && { color: C.text }]}>{pctText(prob)}</Text>
-          <Text style={[st.mult, { color: C.kalshi }]}>{k ? xText(kalshiMultiplier(k.yesAsk)) : '—'}</Text>
+          <View style={{ width: 50, alignItems: 'flex-end' }}>
+            <Text style={[st.mult, { color: C.kalshi, fontWeight: '800' }]}>{k && kalshiYesProb(k) !== null ? pctText(kalshiYesProb(k)!) : '—'}</Text>
+            {k && <Text style={{ color: C.faint, fontSize: 10 }}>{xText(kalshiMultiplier(k.yesAsk))}</Text>}
+          </View>
           <Text style={st.mult}>{xText(americanToMultiplier(ml))}</Text>
         </View>
         {game.state !== 'pre' && <Text style={[st.score, winner && { color: C.text }]}>{side.score}</Text>}
@@ -55,8 +58,8 @@ export function GameCard({ game, pred, summary, kalshi, favoriteId, onPress }: P
           </Text>
         </View>
         <View style={st.cols}>
-          <Text style={st.colHead}>WIN</Text>
-          <Text style={[st.colHead, { color: C.kalshi }]}>KALSHI</Text>
+          <Text style={st.colHead}>VELARYN</Text>
+          <Text style={[st.colHead, { color: C.kalshi }]}>KALSHI %</Text>
           <Text style={st.colHead}>{odds?.provider ? odds.provider.slice(0, 6).toUpperCase() : 'BOOK'}</Text>
         </View>
         {game.state !== 'pre' && <View style={{ width: 40 }} />}
@@ -74,7 +77,7 @@ export function GameCard({ game, pred, summary, kalshi, favoriteId, onPress }: P
               {pickTeam.abbr} {pctText(pickProb)}
             </Text>
           </Text>
-          <Pill text={pred.confidence.toUpperCase()} color={pred.confidence === 'Lean' ? C.dim : pred.confidence === 'Solid' ? C.blue : C.green} />
+          <Pill text={`${pred.confidence.toUpperCase()} ${'●'.repeat(['Lean', 'Solid', 'Strong', 'Lock'].indexOf(pred.confidence) + 1)}`} color={pred.confidence === 'Lean' ? C.dim : pred.confidence === 'Solid' ? C.blue : C.green} />
         </View>
       )}
     </Pressable>
