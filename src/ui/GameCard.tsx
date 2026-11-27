@@ -15,41 +15,59 @@ interface Props {
   onPress: () => void;
 }
 
+const TIERS = ['Lean', 'Solid', 'Strong', 'Lock'];
+
 export function GameCard({ game, pred, summary, kalshi, favoriteId, onPress }: Props) {
   const fav = favoriteId === game.home.team.id || favoriteId === game.away.team.id;
   const odds = summary?.odds ?? game.odds;
   const pickHome = pred.pickTeamId === game.home.team.id;
   const pickProb = pickHome ? pred.homeWinProb : 1 - pred.homeWinProb;
   const pickTeam = pickHome ? game.home.team : game.away.team;
+  const book = odds?.provider ?? 'Book';
 
-  const row = (side: GameSide, prob: number, ml: number | null) => {
-    const k = kalshi?.winner[side.team.id];
+  const teamRow = (side: GameSide, prob: number) => {
+    const isFav = favoriteId === side.team.id;
     const winner = game.state === 'post' && side.score === Math.max(game.home.score, game.away.score);
+    const picked = pred.pickTeamId === side.team.id && game.state !== 'post';
     return (
       <View style={st.teamRow}>
-        <Logo uri={side.team.logo} size={30} />
-        <View style={{ flex: 1, marginLeft: 10 }}>
-          <Text style={[st.team, favoriteId === side.team.id && { color: C.amber }]}>
-            {favoriteId === side.team.id ? '★ ' : ''}
+        <Logo uri={side.team.logo} size={38} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={[st.team, isFav && { color: C.amber }]} numberOfLines={1}>
+            {isFav ? '★ ' : ''}
             {side.team.short}
           </Text>
           <Text style={st.record}>{side.record}</Text>
         </View>
-        <View style={st.cols}>
-          <Text style={[st.prob, prob >= 0.5 && { color: C.text }]}>{pctText(prob)}</Text>
-          <View style={{ width: 50, alignItems: 'flex-end' }}>
-            <Text style={[st.mult, { color: C.kalshi, fontWeight: '800' }]}>{k && kalshiYesProb(k) !== null ? pctText(kalshiYesProb(k)!) : '—'}</Text>
-            {k && <Text style={{ color: C.faint, fontSize: 10 }}>{xText(kalshiMultiplier(k.yesAsk))}</Text>}
-          </View>
-          <Text style={st.mult}>{xText(americanToMultiplier(ml))}</Text>
-        </View>
         {game.state !== 'pre' && <Text style={[st.score, winner && { color: C.text }]}>{side.score}</Text>}
+        <Text style={[st.prob, picked && { color: C.text }]}>{pctText(prob)}</Text>
+      </View>
+    );
+  };
+
+  const oddsBox = (side: GameSide, ml: number | null) => {
+    const k = kalshi?.winner[side.team.id];
+    const kp = k ? kalshiYesProb(k) : null;
+    return (
+      <View style={st.oddsBox}>
+        <Text style={st.oddsTeam}>{side.team.abbr}</Text>
+        <View style={st.oddsLine}>
+          <Text style={[st.oddsLabel, { color: C.kalshi }]}>Kalshi</Text>
+          <Text style={[st.oddsVal, { color: C.kalshi }]}>
+            {kp !== null ? pctText(kp) : '—'}
+            {k ? `  ${xText(kalshiMultiplier(k.yesAsk))}` : ''}
+          </Text>
+        </View>
+        <View style={st.oddsLine}>
+          <Text style={st.oddsLabel}>{book}</Text>
+          <Text style={st.oddsVal}>{xText(americanToMultiplier(ml))}</Text>
+        </View>
       </View>
     );
   };
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [st.card, fav && st.fav, pressed && { opacity: 0.8 }]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [st.card, fav && st.fav, pressed && { opacity: 0.85 }]}>
       <View style={st.head}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           {game.state === 'in' && <View style={st.liveDot} />}
@@ -57,47 +75,58 @@ export function GameCard({ game, pred, summary, kalshi, favoriteId, onPress }: P
             {game.state === 'pre' ? new Date(game.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : game.detail}
           </Text>
         </View>
-        <View style={st.cols}>
-          <Text style={st.colHead}>VELARYN</Text>
-          <Text style={[st.colHead, { color: C.kalshi }]}>KALSHI %</Text>
-          <Text style={st.colHead}>{odds?.provider ? odds.provider.slice(0, 6).toUpperCase() : 'BOOK'}</Text>
-        </View>
-        {game.state !== 'pre' && <View style={{ width: 40 }} />}
+        <Text style={st.colHead}>VELARYN WIN %</Text>
       </View>
-      {row(game.away, 1 - pred.homeWinProb, odds?.awayML ?? null)}
-      {row(game.home, pred.homeWinProb, odds?.homeML ?? null)}
-      <View style={{ marginTop: 10 }}>
+
+      {teamRow(game.away, 1 - pred.homeWinProb)}
+      {teamRow(game.home, pred.homeWinProb)}
+
+      <View style={{ marginTop: 12 }}>
         <ProbBar home={pred.homeWinProb} />
       </View>
+
       {game.state !== 'post' && (
-        <View style={st.foot}>
-          <Text style={st.pick}>
-            {pred.live ? 'Live pick: ' : 'Velaryn pick: '}
-            <Text style={{ color: C.text, fontWeight: '800' }}>
-              {pickTeam.abbr} {pctText(pickProb)}
+        <>
+          <View style={st.oddsRow}>
+            {oddsBox(game.away, odds?.awayML ?? null)}
+            {oddsBox(game.home, odds?.homeML ?? null)}
+          </View>
+          <View style={st.foot}>
+            <Text style={st.pick}>
+              {pred.live ? 'Live pick  ' : 'Velaryn pick  '}
+              <Text style={{ color: C.text, fontWeight: '800' }}>
+                {pickTeam.abbr} {pctText(pickProb)}
+              </Text>
             </Text>
-          </Text>
-          <Pill text={`${pred.confidence.toUpperCase()} ${'●'.repeat(['Lean', 'Solid', 'Strong', 'Lock'].indexOf(pred.confidence) + 1)}`} color={pred.confidence === 'Lean' ? C.dim : pred.confidence === 'Solid' ? C.blue : C.green} />
-        </View>
+            <Pill
+              text={`${pred.confidence.toUpperCase()} ${'●'.repeat(TIERS.indexOf(pred.confidence) + 1)}`}
+              color={pred.confidence === 'Lean' ? C.dim : pred.confidence === 'Solid' ? C.blue : C.green}
+            />
+          </View>
+        </>
       )}
     </Pressable>
   );
 }
 
 const st = StyleSheet.create({
-  card: { backgroundColor: C.card, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: C.line },
+  card: { backgroundColor: C.card, borderRadius: 18, padding: 18, marginBottom: 18, borderWidth: 1, borderColor: C.line },
   fav: { borderColor: C.amber },
-  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  status: { color: C.dim, fontSize: 12, fontWeight: '700' },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.red },
-  cols: { flexDirection: 'row', width: 150, justifyContent: 'space-between' },
-  colHead: { width: 50, textAlign: 'right', color: C.faint, fontSize: 9, fontWeight: '800' },
-  teamRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
-  team: { color: C.text, fontSize: 16, fontWeight: '700' },
-  record: { color: C.faint, fontSize: 11 },
-  prob: { width: 50, textAlign: 'right', color: C.dim, fontSize: 15, fontWeight: '800' },
-  mult: { width: 50, textAlign: 'right', color: C.dim, fontSize: 13, fontWeight: '600' },
-  score: { width: 40, textAlign: 'right', color: C.dim, fontSize: 20, fontWeight: '800' },
-  foot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
-  pick: { color: C.dim, fontSize: 13 },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  status: { color: C.dim, fontSize: 13, fontWeight: '700' },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.red },
+  colHead: { color: C.faint, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  teamRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  team: { color: C.text, fontSize: 17, fontWeight: '700' },
+  record: { color: C.faint, fontSize: 12, marginTop: 2 },
+  prob: { width: 64, textAlign: 'right', color: C.dim, fontSize: 20, fontWeight: '900' },
+  score: { width: 48, textAlign: 'right', color: C.dim, fontSize: 22, fontWeight: '800', marginRight: 8 },
+  oddsRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  oddsBox: { flex: 1, backgroundColor: C.cardHi, borderRadius: 12, padding: 10, gap: 4 },
+  oddsTeam: { color: C.text, fontSize: 12, fontWeight: '800', marginBottom: 2 },
+  oddsLine: { flexDirection: 'row', justifyContent: 'space-between' },
+  oddsLabel: { color: C.dim, fontSize: 12 },
+  oddsVal: { color: C.text, fontSize: 12, fontWeight: '700' },
+  foot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderColor: C.line },
+  pick: { color: C.dim, fontSize: 14 },
 });

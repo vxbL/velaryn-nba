@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { PlayerStats } from '../api';
-import { buildCombos, comboStats, gameLegs, kellyPct, propLegs, valueLegs, type ComboMode, type Leg } from '../edges';
+import {
+  buildCombos,
+  comboStats,
+  CONFIDENT_PROB,
+  gameLegs,
+  isConfident2x,
+  kellyPct,
+  MIN_COMBO_MULTIPLIER,
+  propLegs,
+  valueLegs,
+  type Combo,
+  type ComboMode,
+  type Leg,
+} from '../edges';
 import { fetchKalshiProps, fetchMarkets, kalshiYesProb, type KalshiMarket, type KalshiProp } from '../kalshi';
 import { getBets, saveBets, type LockedBet, type LockedLeg } from '../storage';
 import { C, pctText, xText } from '../theme';
@@ -9,9 +22,10 @@ import { KALSHI_REFRESH_MS, type DayData } from '../useData';
 import { OpenButton, Pill, Section, s } from './common';
 
 const money = (n: number) => `$${n.toFixed(2)}`;
+const comboKey = (c: Combo) => c.legs.map((l) => l.id).sort().join();
 
 const MODE_INFO: Record<ComboMode, { label: string; blurb: string }> = {
-  safest: { label: 'SAFEST', blurb: 'Highest chance to hit. Smaller payouts.' },
+  safest: { label: 'SAFEST', blurb: 'Highest chance to hit.' },
   value: { label: 'BEST VALUE', blurb: 'Best payout for the risk.' },
   payout: { label: 'BIG PAYOUT', blurb: 'Bigger multipliers. Hits less often.' },
 };
@@ -20,6 +34,7 @@ export function CombosScreen({ day, players }: { day: DayData | null; players: R
   const [props, setProps] = useState<Record<string, KalshiProp[]> | null>(null);
   const [bankroll, setBankroll] = useState('100');
   const [mode, setMode] = useState<ComboMode>('safest');
+  const [winnersOnly, setWinnersOnly] = useState(true);
   const [slip, setSlip] = useState<Leg[]>([]);
   const [bets, setBets] = useState<LockedBet[]>([]);
 
@@ -50,7 +65,12 @@ export function CombosScreen({ day, players }: { day: DayData | null; players: R
   }, [day, props, players]);
 
   const singles = valueLegs(legs, 0.6).sort((a, b) => b.prob - a.prob).slice(0, 15);
-  const combos = buildCombos(legs, mode);
+  const combos = buildCombos(legs, mode, { winnersOnly });
+  // Featured pick: the most likely combo that still pays 2x+, across all modes
+  const confident = (['safest', 'value', 'payout'] as ComboMode[])
+    .flatMap((m) => buildCombos(legs, m, { winnersOnly, max: 30 }))
+    .filter(isConfident2x)
+    .sort((a, b) => b.prob - a.prob)[0];
   const bank = Math.max(0, parseFloat(bankroll) || 0);
 
   const updateBets = (next: LockedBet[]) => {
@@ -102,34 +122,34 @@ export function CombosScreen({ day, players }: { day: DayData | null; players: R
             </Pressable>
           ))}
         </View>
-        <Text style={[s.dim, { marginBottom: 10 }]}>{MODE_INFO[mode].blurb}</Text>
-        {combos.length === 0 && <Text style={s.dim}>No combos pass the filters for this day yet. Try another mode, or check back when Kalshi opens more markets.</Text>}
-        {combos.map((c, i) => {
-          const stake = (bank * c.stakePct) / 100;
-          return (
-            <View key={i} style={st.combo}>
-              <View style={[s.row, { justifyContent: 'space-between', marginBottom: 6 }]}>
-                <Text style={[s.bold, { fontSize: 16 }]}>
-                  {c.legs.length}-leg · {xText(c.multiplier)}
-                </Text>
-                <Text style={[s.bold, { color: c.prob >= 0.5 ? C.green : C.amber }]}>Hits {pctText(c.prob)}</Text>
-              </View>
-              {c.legs.map((l) => (
-                <Text key={l.id} style={[s.text, { paddingVertical: 2 }]}>
-                  • {l.label} <Text style={s.dim}>({l.game}, {pctText(l.prob)})</Text>
-                </Text>
-              ))}
-              <Text style={[s.dim, { marginTop: 6 }]}>
-                Suggested {money(stake)} → {money(stake * c.multiplier)} · +{(c.ev * 100).toFixed(1)}% value · loses {pctText(1 - c.prob)} of the time
-              </Text>
-              <View style={[s.row, { marginTop: 8, gap: 8 }]}>
-                <Pressable style={[st.lockBtn, { flex: 1 }]} onPress={() => setSlip(c.legs)}>
-                  <Text style={st.lockText}>Load into slip</Text>
-                </Pressable>
-              </View>
-            </View>
-          );
-        })}
+        <Text style={[s.dim, { marginBottom: 10 }]}>
+          {MODE_INFO[mode].blurb} Every combo pays at least {MIN_COMBO_MULTIPLIER}x.
+        </Text>
+        <Pressable onPress={() => setWinnersOnly((w) => !w)} style={[s.row, { gap: 8, marginBottom: 14 }]}>
+          <View style={[st.check, winnersOnly && { backgroundColor: C.kalshi, borderColor: C.kalshi }]}>{winnersOnly && <Text style={{ color: '#000', fontWeight: '900', fontSize: 12 }}>✓</Text>}</View>
+          <Text style={s.text}>Winners only (who wins the game)</Text>
+        </Pressable>
+
+        {confident && (
+          <View style={{ marginBottom: 16 }}>
+            <Text style={[s.bold, { color: C.amber, marginBottom: 6 }]}>⭐ Velaryn's confident 2x</Text>
+            <ComboCard c={confident} bank={bank} featured onLoad={() => setSlip(confident.legs)} />
+          </View>
+        )}
+        {!confident && combos.length > 0 && (
+          <Text style={[s.dim, { marginBottom: 12 }]}>No 2x combo is likely enough today (needs {pctText(CONFIDENT_PROB)}+ to hit), so Velaryn is sticking to safer payouts.</Text>
+        )}
+
+        {combos.length === 0 && (
+          <Text style={s.dim}>
+            No combos pay {MIN_COMBO_MULTIPLIER}x+ with value for this day yet.{winnersOnly ? ' Try unchecking "Winners only", or' : ' Try another mode, or'} check back closer to tip-off.
+          </Text>
+        )}
+        {combos
+          .filter((c) => !confident || comboKey(c) !== comboKey(confident))
+          .map((c, i) => (
+            <ComboCard key={i} c={c} bank={bank} onLoad={() => setSlip(c.legs)} />
+          ))}
       </Section>
 
       <Section title="Best single bets" right={<Pill text="MOST LIKELY FIRST" color={C.faint} />}>
@@ -159,6 +179,38 @@ export function CombosScreen({ day, players }: { day: DayData | null; players: R
         })}
       </Section>
     </ScrollView>
+  );
+}
+
+function ComboCard({ c, bank, featured, onLoad }: { c: Combo; bank: number; featured?: boolean; onLoad: () => void }) {
+  const stake = (bank * c.stakePct) / 100;
+  return (
+    <View style={[st.combo, featured && { borderWidth: 1, borderColor: C.amber, backgroundColor: '#1c180d' }]}>
+      <View style={[s.row, { justifyContent: 'space-between', marginBottom: 8 }]}>
+        <View style={[s.row, { gap: 8 }]}>
+          <Text style={[s.bold, { fontSize: 20 }]}>{xText(c.multiplier)}</Text>
+          {isConfident2x(c) && !featured && <Pill text="2X+ CONFIDENT" color={C.amber} />}
+        </View>
+        <Text style={[s.bold, { fontSize: 15, color: c.prob >= 0.5 ? C.green : C.amber }]}>Hits {pctText(c.prob)}</Text>
+      </View>
+      {c.legs.map((l) => (
+        <View key={l.id} style={[s.row, { paddingVertical: 4 }]}>
+          <Text style={[s.text, { flex: 1 }]}>
+            {l.kind === 'Winner' ? '🏀 ' : '• '}
+            {l.label}
+          </Text>
+          <Text style={s.dim}>
+            {l.game} · {pctText(l.prob)}
+          </Text>
+        </View>
+      ))}
+      <Text style={[s.dim, { marginTop: 8 }]}>
+        $10 → {money(10 * c.multiplier)} · suggested stake {money(stake)} · +{(c.ev * 100).toFixed(1)}% value · loses {pctText(1 - c.prob)} of the time
+      </Text>
+      <Pressable style={[st.lockBtn, { marginTop: 10 }, featured && { backgroundColor: C.amber, borderColor: C.amber }]} onPress={onLoad}>
+        <Text style={[st.lockText, featured && { color: '#000' }]}>Load into slip</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -340,7 +392,8 @@ const st = StyleSheet.create({
   warn: { backgroundColor: '#2a2110', borderColor: '#5c4612', borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 14 },
   input: { backgroundColor: C.cardHi, color: C.text, borderRadius: 10, borderWidth: 1, borderColor: C.line, paddingHorizontal: 12, paddingVertical: 8, fontSize: 16, flex: 1 },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderBottomWidth: 1, borderColor: C.line, gap: 10 },
-  combo: { backgroundColor: C.cardHi, borderRadius: 12, padding: 12, marginBottom: 10 },
+  combo: { backgroundColor: C.cardHi, borderRadius: 14, padding: 14, marginBottom: 14 },
+  check: { width: 20, height: 20, borderRadius: 5, borderWidth: 2, borderColor: C.faint, alignItems: 'center', justifyContent: 'center' },
   stat: { flex: 1, backgroundColor: C.cardHi, borderRadius: 10, padding: 8, alignItems: 'center' },
   lockBtn: { borderRadius: 10, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: C.kalshi },
   lockText: { color: C.kalshi, fontWeight: '800' },

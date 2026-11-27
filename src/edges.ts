@@ -156,12 +156,24 @@ const MODES: Record<ComboMode, { minLegProb: number; minEv: number; maxLegs: num
   payout: { minLegProb: 0.55, minEv: 0.02, maxLegs: 4, minComboProb: 0.15 }, // bigger multiplier, hits less often
 };
 
-export function buildCombos(legs: Leg[], mode: ComboMode = 'safest', max = 8): Combo[] {
+export const MIN_COMBO_MULTIPLIER = 1.5;
+export const CONFIDENT_MULTIPLIER = 2;
+// A combo that pays 2x+ while still hitting this often gets flagged as a confident 2x
+export const CONFIDENT_PROB = 0.45;
+
+export const isConfident2x = (c: Combo) => c.multiplier >= CONFIDENT_MULTIPLIER && c.prob >= CONFIDENT_PROB;
+
+export function buildCombos(legs: Leg[], mode: ComboMode = 'safest', opts: { winnersOnly?: boolean; max?: number } = {}): Combo[] {
+  const { winnersOnly = false, max = 8 } = opts;
   const cfg = MODES[mode];
+  // Winner markets are deep and priced tightly, so a winners-only combo may use legs that are about
+  // fair (down to -3%) as long as the combo as a whole still has positive expected value.
+  const minEv = winnersOnly ? Math.min(cfg.minEv, -0.03) : cfg.minEv;
+  const pool0 = winnersOnly ? legs.filter((l) => l.kind === 'Winner') : legs;
   // One leg per game so legs don't depend on each other. In 'safest' mode keep the most likely
   // value leg of each game, otherwise the one with the best expected value.
   const perGame = new Map<string, Leg>();
-  for (const l of valueLegs(legs, cfg.minLegProb, cfg.minEv)) {
+  for (const l of valueLegs(pool0, cfg.minLegProb, minEv)) {
     const cur = perGame.get(l.gameId);
     const better = mode === 'safest' ? !cur || l.prob > cur.prob : !cur || l.ev > cur.ev;
     if (better) perGame.set(l.gameId, l);
@@ -172,7 +184,7 @@ export function buildCombos(legs: Leg[], mode: ComboMode = 'safest', max = 8): C
     const prob = ls.reduce((s, l) => s * l.prob, 1);
     const multiplier = ls.reduce((s, l) => s * l.multiplier, 1);
     const ev = prob * multiplier - 1;
-    if (ev > 0 && prob >= cfg.minComboProb) combos.push({ legs: ls, prob, multiplier, ev, stakePct: kellyPct(prob, multiplier) });
+    if (ev > 0 && prob >= cfg.minComboProb && multiplier >= MIN_COMBO_MULTIPLIER) combos.push({ legs: ls, prob, multiplier, ev, stakePct: kellyPct(prob, multiplier) });
   };
   const pick = (start: number, chosen: Leg[]) => {
     if (chosen.length >= 2) add(chosen);
